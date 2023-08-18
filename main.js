@@ -14,14 +14,44 @@ const tempMatrix = new THREE.Matrix4();
 
 let group;
 
-init();
-animate();
+let physicsWorld;
+let rigidBodies = [];
+let clock;
+let tmpTrans;
+
+Ammo().then(init);
 
 function init() {
+  tmpTrans = new Ammo.btTransform();
+
+  setupPhysicsWorld();
+  setupConf();
+
+  group = new THREE.Group();
+  scene.add( group );
+
+  createFloor();
+  createCube();
+  createBall();
+  setupController();
+
+  window.addEventListener('resize', onWindowResize);
+
+  animate();
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function setupConf(){
+  clock = new THREE.Clock();
   container = document.getElementById('container');
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color( 0xA0D2FF );
+  scene.background = new THREE.Color( 0xbfd1e5 );
 
   camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -36,56 +66,19 @@ function init() {
   container.appendChild(renderer.domElement);
 
   document.body.appendChild(VRButton.createButton(renderer));
+}
 
+function setupPhysicsWorld(){
+  let collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration(),
+      dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration),
+      overlappingPairCache    = new Ammo.btDbvtBroadphase(),
+      solver                  = new Ammo.btSequentialImpulseConstraintSolver();
 
-  // Create the floor
-  const floorGeometry = new THREE.PlaneGeometry(10, 10);
-  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x8080ff });
-  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
+  physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+  physicsWorld.setGravity(new Ammo.btVector3(0, -0.5, 0));
+}
 
-  // Create the walls
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xffaaaa });
-  const wallHeight = 4;
-
-  const wall1 = new THREE.Mesh(new THREE.PlaneGeometry(10, wallHeight), wallMaterial);
-  wall1.position.z = -5;
-  wall1.position.y = wallHeight / 2;
-  scene.add(wall1);
-
-  const wall2 = new THREE.Mesh(new THREE.PlaneGeometry(10, wallHeight), wallMaterial);
-  wall2.position.z = 5;
-  wall2.position.y = wallHeight / 2;
-  wall2.rotation.y = Math.PI;
-  scene.add(wall2);
-
-  const wall3 = new THREE.Mesh(new THREE.PlaneGeometry(10, wallHeight), wallMaterial);
-  wall3.position.z = 0;
-  wall3.position.y = wallHeight / 2;
-  wall3.position.x = -5;
-  wall3.rotation.y = Math.PI / 2;
-  scene.add(wall3);
-
-  const wall4 = new THREE.Mesh(new THREE.PlaneGeometry(10, wallHeight), wallMaterial);
-  wall4.position.z = 0;
-  wall4.position.y = wallHeight / 2;
-  wall4.position.x = 5;
-  wall4.rotation.y = -Math.PI / 2;
-  scene.add(wall4);
-
-  group = new THREE.Group();
-  scene.add( group );
-
-  // Add a cube to the scene
-  const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-  const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-  const cube = new THREE.Mesh(geometry, material);
-  cube.position.set(0, 0.25, -1); // Adjust the cube position as needed
-  
-  group.add( cube );
-
-
+function setupController(){
   // Create the first controller and its model
   controller1 = renderer.xr.getController(0);
   controller1.addEventListener( 'selectstart', onSelectStart );
@@ -117,26 +110,100 @@ function init() {
   controller2.add( line.clone() );
 
   raycaster = new THREE.Raycaster();
-
-  window.addEventListener('resize', onWindowResize);
 }
 
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+function createFloor(){
+  let pos = {x: 0, y: -2, z: 0};
+  let scale = {x: 10, y: 2, z: 10};
+  let quat = {x: 0, y: 0, z: 0, w: 1};
+  let mass = 0;
+    
+  let blockPlane = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshPhongMaterial({color: 0x8080ff}));
+
+  blockPlane.position.set(pos.x, pos.y, pos.z);
+  blockPlane.scale.set(scale.x, scale.y, scale.z);
+
+  blockPlane.castShadow = true;
+  blockPlane.receiveShadow = true;
+
+  scene.add(blockPlane);
+    
+  let transform = new Ammo.btTransform();
+  transform.setIdentity();
+  transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+  transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+  let motionState = new Ammo.btDefaultMotionState( transform );
+
+  let colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+  colShape.setMargin( 0.05 );
+
+  let localInertia = new Ammo.btVector3( 0, 0, 0 );
+  colShape.calculateLocalInertia( mass, localInertia );
+
+  let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+  let body = new Ammo.btRigidBody( rbInfo );
+
+  physicsWorld.addRigidBody( body );
 }
 
-function onSelectStart( event ) {
+function createCube(){
+  // Add a cube to the scene
+  const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+  const cube = new THREE.Mesh(geometry, material);
+  cube.position.set(1, 1, -2.5); // Adjust the cube position as needed
+  
+  group.add( cube );
+}
+
+function createBall(){    
+  let pos = {x: 0, y: 4, z: -3.5};
+  let radius = 1;
+  let quat = {x: 0, y: 0, z: 0, w: 1};
+  let mass = 1;
+
+  let ball = new THREE.Mesh(new THREE.SphereGeometry(radius), new THREE.MeshPhongMaterial({color: 0x00ff00}));
+
+  ball.position.set(pos.x, pos.y, pos.z);
+  
+  ball.castShadow = true;
+  ball.receiveShadow = true;
+  
+  let transform = new Ammo.btTransform();
+  transform.setIdentity();
+  transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+  transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+  let motionState = new Ammo.btDefaultMotionState( transform );
+  
+  let colShape = new Ammo.btSphereShape( radius );
+  colShape.setMargin( 0.05 );
+  
+  let localInertia = new Ammo.btVector3( 0, 0, 0 );
+  colShape.calculateLocalInertia( mass, localInertia );
+  
+  let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+  let body = new Ammo.btRigidBody( rbInfo );
+  
+  physicsWorld.addRigidBody( body );
+  
+  ball.userData.physicsBody = body;
+  
+  rigidBodies.push(ball);
+  group.add(ball);
+}
+
+function onSelectStart(event) {
   const controller = event.target;
-  const intersections = getIntersections( controller );
+  const intersections = getIntersections(controller);
 
-  if( intersections.length > 0 ) {
-    const intersection = intersections[ 0 ];
+  if (intersections.length > 0) {
+    const intersection = intersections[0];
 
     const object = intersection.object;
     object.material.emissive.b = 1;
-		controller.attach( object );
+
+    controller.attach(object);
+    rigidBodies.pop(object);
 
     controller.userData.selected = object;
   }
@@ -144,20 +211,18 @@ function onSelectStart( event ) {
   controller.userData.targetRayMode = event.data.targetRayMode;
 }
 
-function onSelectEnd( event ) {
-
+function onSelectEnd(event) {
   const controller = event.target;
 
-  if ( controller.userData.selected !== undefined ) {
-
+  if (controller.userData.selected !== undefined) {
     const object = controller.userData.selected;
     object.material.emissive.b = 0;
-    group.attach( object );
+
+    group.attach(object);
+    rigidBodies.push(object);
 
     controller.userData.selected = undefined;
-
   }
-
 }
 
 function getIntersections( controller ) {
@@ -219,11 +284,33 @@ function animate() {
 }
 
 function render() {
+  cleanIntersected();
+  let deltaTime = clock.getDelta();
 
-  cleanIntersected()
+  updatePhysics( deltaTime );
 
   intersectObjects( controller1 );
   intersectObjects( controller2 );
 
   renderer.render(scene, camera);
+}
+
+function updatePhysics( deltaTime ){    
+  physicsWorld.stepSimulation( deltaTime, 10 );
+  
+  for ( let i = 0; i < rigidBodies.length; i++ ) {
+    
+    let objThree = rigidBodies[ i ];
+    let objAmmo = objThree.userData.physicsBody;
+    let ms = objAmmo.getMotionState();
+    
+    if ( ms ) {
+      ms.getWorldTransform( tmpTrans );
+      let p = tmpTrans.getOrigin();
+      let q = tmpTrans.getRotation();
+
+      objThree.position.set( p.x(), p.y(), p.z() );
+      objThree.quaternion.set( q.x(), q.y(), q.z(), q.w() );
+    }
+  }
 }
