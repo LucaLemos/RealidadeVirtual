@@ -19,6 +19,10 @@ let rigidBodies = [];
 let clock;
 let tmpTrans;
 
+let ballObject = null,
+moveDirection = { left: 0, right: 0, forward: 0, back: 0 };
+const STATE = { DISABLE_DEACTIVATION : 4 };
+
 Ammo().then(init);
 
 function init() {
@@ -30,20 +34,25 @@ function init() {
   group = new THREE.Group();
   scene.add( group );
 
+  setupController();
   createFloor();
   createCube();
-  createBall();
-  setupController();
+  createBall(0, 1, -3.5);
+  createBall(0, 4, -3.5);
 
   window.addEventListener('resize', onWindowResize);
-
+  
   animate();
 }
 
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+function setupPhysicsWorld(){
+  let collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration(),
+      dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration),
+      overlappingPairCache    = new Ammo.btDbvtBroadphase(),
+      solver                  = new Ammo.btSequentialImpulseConstraintSolver();
+
+  physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+  physicsWorld.setGravity(new Ammo.btVector3(0, -0.5, 0));
 }
 
 function setupConf(){
@@ -66,16 +75,6 @@ function setupConf(){
   container.appendChild(renderer.domElement);
 
   document.body.appendChild(VRButton.createButton(renderer));
-}
-
-function setupPhysicsWorld(){
-  let collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration(),
-      dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration),
-      overlappingPairCache    = new Ammo.btDbvtBroadphase(),
-      solver                  = new Ammo.btSequentialImpulseConstraintSolver();
-
-  physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
-  physicsWorld.setGravity(new Ammo.btVector3(0, -0.5, 0));
 }
 
 function setupController(){
@@ -143,6 +142,8 @@ function createFloor(){
   let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
   let body = new Ammo.btRigidBody( rbInfo );
 
+  body.setFriction(4);
+  body.setRollingFriction(10);
   physicsWorld.addRigidBody( body );
 }
 
@@ -156,8 +157,8 @@ function createCube(){
   group.add( cube );
 }
 
-function createBall(){    
-  let pos = {x: 0, y: 4, z: -3.5};
+function createBall( x, y, z){    
+  let pos = {x: x, y: y, z: z};
   let radius = 1;
   let quat = {x: 0, y: 0, z: 0, w: 1};
   let mass = 1;
@@ -183,6 +184,10 @@ function createBall(){
   
   let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
   let body = new Ammo.btRigidBody( rbInfo );
+
+  body.setFriction(4);
+  body.setRollingFriction(10);
+  body.setActivationState( STATE.DISABLE_DEACTIVATION );
   
   physicsWorld.addRigidBody( body );
   
@@ -202,8 +207,9 @@ function onSelectStart(event) {
     const object = intersection.object;
     object.material.emissive.b = 1;
 
-    controller.attach(object);
+    //physicsWorld.removeRigidBody(object.userData.physicsBody)
     rigidBodies.pop(object);
+    controller.attach(object);
 
     controller.userData.selected = object;
   }
@@ -219,6 +225,21 @@ function onSelectEnd(event) {
     object.material.emissive.b = 0;
 
     group.attach(object);
+
+    let posx = object.position.x
+    let posy = object.position.y
+    let posz = object.position.z
+    console.log(posy)
+    
+    let physicsBody = object.userData.physicsBody;
+    const newPosition = new Ammo.btVector3(posx, posy, posz);
+    const newTransform = new Ammo.btTransform();
+    newTransform.setIdentity();
+    newTransform.setOrigin(newPosition);
+
+    physicsBody.setWorldTransform(newTransform);
+  
+    //physicsWorld.addRigidBody( physicsBody );
     rigidBodies.push(object);
 
     controller.userData.selected = undefined;
@@ -234,7 +255,6 @@ function getIntersections( controller ) {
 	raycaster.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
 
 	return raycaster.intersectObjects( group.children, false );
-
 }
 
 function intersectObjects( controller ) {
@@ -287,10 +307,10 @@ function render() {
   cleanIntersected();
   let deltaTime = clock.getDelta();
 
-  updatePhysics( deltaTime );
-
   intersectObjects( controller1 );
   intersectObjects( controller2 );
+
+  updatePhysics( deltaTime );
 
   renderer.render(scene, camera);
 }
@@ -313,4 +333,10 @@ function updatePhysics( deltaTime ){
       objThree.quaternion.set( q.x(), q.y(), q.z(), q.w() );
     }
   }
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
