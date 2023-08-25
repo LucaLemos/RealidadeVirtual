@@ -1,26 +1,19 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
-import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+
+import * as controller from './controllers.js';
 
 let container;
 let camera, scene, renderer;
-let controller1, controller2;
-let controllerGrip1, controllerGrip2;
-
-let raycaster;
-
-const intersected = [];
-const tempMatrix = new THREE.Matrix4();
-
-let group;
 
 let physicsWorld;
-let rigidBodies = [];
+let rigidBodies = controller.rigidBodies;
 let clock;
 let tmpTrans;
 
-let ballObject = null,
-moveDirection = { left: 0, right: 0, forward: 0, back: 0 };
 const STATE = { DISABLE_DEACTIVATION : 4 };
 
 Ammo().then(init);
@@ -31,19 +24,21 @@ function init() {
   setupPhysicsWorld();
   setupConf();
 
-  group = new THREE.Group();
-  scene.add( group );
+  scene.add( controller.group );
 
-  setupController();
-  createFloor();
-  createCube();
-  createBall(0, 1, -3.5);
-  createBall(0, 4, -3.5);
+  controller.setupController(scene, renderer);
+
+  createRoom();
+  //createBall(0, 1, -3.5);
+  //createBall(0, 4, -3.5);
+  createFlower()
+  createTable()
 
   window.addEventListener('resize', onWindowResize);
   
   animate();
 }
+
 
 function setupPhysicsWorld(){
   let collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration(),
@@ -52,9 +47,8 @@ function setupPhysicsWorld(){
       solver                  = new Ammo.btSequentialImpulseConstraintSolver();
 
   physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
-  physicsWorld.setGravity(new Ammo.btVector3(0, -0.5, 0));
+  physicsWorld.setGravity(new Ammo.btVector3(0, -2, 0));
 }
-
 function setupConf(){
   clock = new THREE.Clock();
   container = document.getElementById('container');
@@ -77,74 +71,118 @@ function setupConf(){
   document.body.appendChild(VRButton.createButton(renderer));
 }
 
-function setupController(){
-  // Create the first controller and its model
-  controller1 = renderer.xr.getController(0);
-  controller1.addEventListener( 'selectstart', onSelectStart );
-	controller1.addEventListener( 'selectend', onSelectEnd );
-  scene.add(controller1);
+function createTable(){
+  const loader = new GLTFLoader();
 
-  // Create the second controller and its model
-  controller2 = renderer.xr.getController(1);
-  controller2.addEventListener( 'selectstart', onSelectStart );
-	controller2.addEventListener( 'selectend', onSelectEnd );
-  scene.add(controller2);
+  loader.load( 'model/wooden_table.glb', function (gltf) {
+    const model = gltf.scene;
 
-  const controllerModel = new XRControllerModelFactory();
+    let pos = {x: 0, y: 0, z: -3};
+    let scale = {x: 1, y: 1, z: 1.5};
+    let quat = {x: 0, y: 1, z: 0, w: 1};
+    let mass = 1;
 
-  controllerGrip1 = renderer.xr.getControllerGrip( 0 );
-  controllerGrip1.add( controllerModel.createControllerModel( controllerGrip1 ) );
-	scene.add( controllerGrip1 );
+    const boundingBox = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3();
+    boundingBox.getSize(size);
 
-  controllerGrip2 = renderer.xr.getControllerGrip( 1 );
-	controllerGrip2.add( controllerModel.createControllerModel( controllerGrip2 ) );
-	scene.add( controllerGrip2 );
+    model.position.set(pos.x, pos.y, pos.z);
+    model.scale.set(scale.x, scale.y, scale.z);
 
-  const geometryLine = new THREE.BufferGeometry().setFromPoints( [ new THREE.Vector3( 0, 0, 0 ), new THREE.Vector3( 0, 0, -1 ) ]);
-  const line = new THREE.Line( geometryLine)
-  line.name = 'line';
-  line.scale.z = 5;
+    model.castShadow = true;
+    model.receiveShadow = true;
 
-  controller1.add( line.clone() );
-  controller2.add( line.clone() );
+    let transform = new Ammo.btTransform();
+    transform.setIdentity();
+    transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+    transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+    let motionState = new Ammo.btDefaultMotionState( transform );
+    
+    let colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.4, scale.z * 0.5 ) );
+    colShape.setMargin( 0 );
+    
+    let localInertia = new Ammo.btVector3( 0, 0, 0 );
+    colShape.calculateLocalInertia( 1, localInertia );
+    
+    let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+    let body = new Ammo.btRigidBody( rbInfo );
 
-  raycaster = new THREE.Raycaster();
+    body.setFriction(4);
+    body.setRollingFriction(10);
+    body.setActivationState( STATE.DISABLE_DEACTIVATION );
+    
+    physicsWorld.addRigidBody( body );
+    
+    model.userData.physicsBody = body;
+  
+    rigidBodies.push(model); 
+    controller.group.add( model );
+
+  }, undefined, function (error) {
+    console.log("error");
+  });
 }
+function createFlower(){
+  const loader = new GLTFLoader();
 
-function createFloor(){
-  let pos = {x: 0, y: -2, z: 0};
-  let scale = {x: 10, y: 2, z: 10};
-  let quat = {x: 0, y: 0, z: 0, w: 1};
-  let mass = 0;
+  loader.load( 'model/Flower.glb', function (gltf) {
+    const model = gltf.scene;
     
-  let blockPlane = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshPhongMaterial({color: 0x8080ff}));
+    const mesh1 = model.children[0]
+    const mesh2 = model.children[1]
 
-  blockPlane.position.set(pos.x, pos.y, pos.z);
-  blockPlane.scale.set(scale.x, scale.y, scale.z);
-
-  blockPlane.castShadow = true;
-  blockPlane.receiveShadow = true;
-
-  scene.add(blockPlane);
+    var geometries = [];
+    geometries.push(mesh1.geometry);
+    geometries.push(mesh2.geometry);
     
-  let transform = new Ammo.btTransform();
-  transform.setIdentity();
-  transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
-  transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
-  let motionState = new Ammo.btDefaultMotionState( transform );
+    const mergedGeometry = BufferGeometryUtils.mergeBufferGeometries(geometries);
+    const material = mesh1.material;
+    const mergedMesh = new THREE.Mesh(mergedGeometry, material);
 
-  let colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
-  colShape.setMargin( 0.05 );
+    let pos = {x: 0, y: 3, z: -3};
+    let scale = {x: 5, y: 5, z: 5};
+    let quat = {x: 1, y: 0, z: 0, w: 1};
+    let mass = 1;
 
-  let localInertia = new Ammo.btVector3( 0, 0, 0 );
-  colShape.calculateLocalInertia( mass, localInertia );
+    const boundingBox = new THREE.Box3().setFromObject(mergedMesh);
+    const size = new THREE.Vector3();
+    boundingBox.getSize(size);
 
-  let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
-  let body = new Ammo.btRigidBody( rbInfo );
+    mergedMesh.position.set(pos.x, pos.y, pos.z);
+    mergedMesh.scale.set(scale.x, scale.y, scale.z);
 
-  body.setFriction(4);
-  body.setRollingFriction(10);
-  physicsWorld.addRigidBody( body );
+    mergedMesh.castShadow = true;
+    mergedMesh.receiveShadow = true;
+
+    let transform = new Ammo.btTransform();
+    transform.setIdentity();
+    transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+    transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+    let motionState = new Ammo.btDefaultMotionState( transform );
+    
+    let colShape = new Ammo.btBoxShape( new Ammo.btVector3( size.x * 0.5, size.y * 0.5, size.z * 0.5) );
+    colShape.setMargin( 0.05 );
+    
+    let localInertia = new Ammo.btVector3( 0, 0, 0 );
+    colShape.calculateLocalInertia( 1, localInertia );
+    
+    let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+    let body = new Ammo.btRigidBody( rbInfo );
+
+    body.setFriction(4);
+    body.setRollingFriction(10);
+    body.setActivationState( STATE.DISABLE_DEACTIVATION );
+    
+    physicsWorld.addRigidBody( body );
+    
+    mergedMesh.userData.physicsBody = body;
+  
+    rigidBodies.push(mergedMesh); 
+    controller.group.add( mergedMesh );
+  }, undefined, function (error) {
+    console.log("error");
+  });
+
 }
 
 function createCube(){
@@ -197,123 +235,122 @@ function createBall( x, y, z){
   group.add(ball);
 }
 
-function onSelectStart(event) {
-  const controller = event.target;
-  const intersections = getIntersections(controller);
 
-  if (intersections.length > 0) {
-    const intersection = intersections[0];
+function createRoom() {
+  let pos = {x: 0, y: 1, z: -6};
+  let scale = {x: 25, y: 2, z: 8};
+  let quat = {x: THREE.MathUtils.degToRad(90), y: 0, z: 0, w: 1};
+  let mass = 0;
+  createWall(pos, scale, quat, mass);
+  pos = {x: 0, y: 1, z: 6};
+  quat = {x: THREE.MathUtils.degToRad(90), y: 0, z: 0, w: 1};
+  createWall(pos, scale, quat, mass);
+  pos = {x: 6, y: 1, z: 0};
+  quat = {x: THREE.MathUtils.degToRad(90), y: 0, z: THREE.MathUtils.degToRad(90), w: 1};
+  createWall(pos, scale, quat, mass);
+  createWall(pos, scale, quat, mass);
+  pos = {x: -6, y: 1, z: 0};
+  quat = {x: THREE.MathUtils.degToRad(90), y: 0, z: THREE.MathUtils.degToRad(90), w: 1};
+  createWall(pos, scale, quat, mass);
 
-    const object = intersection.object;
-    object.material.emissive.b = 1;
-
-    //physicsWorld.removeRigidBody(object.userData.physicsBody)
-    rigidBodies.pop(object);
-    controller.attach(object);
-
-    controller.userData.selected = object;
-  }
-
-  controller.userData.targetRayMode = event.data.targetRayMode;
+  pos = {x: 0, y: -2, z: 0};
+  scale = {x: 12, y: 2, z: 12};
+  quat = {x: 0, y: 0, z: 0, w: 1};
+  mass = 0;
+  let madeira = 'material/whiteOak.png'
+  let pedra = 'material/slateTileGrey.png'
+  createFloor(pos, scale, quat, mass, madeira);
+  pos = {x: 0, y: 5, z: 0};
+  createFloor(pos, scale, quat, mass, pedra);
 }
+function createFloor(posV, scaleV, quatV, massV, image){
+  let pos = posV;
+  let scale = scaleV;
+  let quat = quatV;
+  let mass = massV;
 
-function onSelectEnd(event) {
-  const controller = event.target;
-
-  if (controller.userData.selected !== undefined) {
-    const object = controller.userData.selected;
-    object.material.emissive.b = 0;
-
-    group.attach(object);
-
-    let posx = object.position.x
-    let posy = object.position.y
-    let posz = object.position.z
-    console.log(posy)
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load(image);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 8);
+  const material = new THREE.MeshBasicMaterial({ map: texture });
     
-    let physicsBody = object.userData.physicsBody;
-    const newPosition = new Ammo.btVector3(posx, posy, posz);
-    const newTransform = new Ammo.btTransform();
-    newTransform.setIdentity();
-    newTransform.setOrigin(newPosition);
-
-    physicsBody.setWorldTransform(newTransform);
+  let blockPlane = new THREE.Mesh(new THREE.BoxGeometry(), material );
   
-    //physicsWorld.addRigidBody( physicsBody );
-    rigidBodies.push(object);
 
-    controller.userData.selected = undefined;
-  }
+  blockPlane.position.set(pos.x, pos.y, pos.z);
+  blockPlane.scale.set(scale.x, scale.y, scale.z);
+
+  blockPlane.castShadow = true;
+  blockPlane.receiveShadow = true;
+
+  scene.add(blockPlane);
+    
+  let transform = new Ammo.btTransform();
+  transform.setIdentity();
+  transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+  transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+  let motionState = new Ammo.btDefaultMotionState( transform );
+
+  let colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+  colShape.setMargin( 0.05 );
+
+  let localInertia = new Ammo.btVector3( 0, 0, 0 );
+  colShape.calculateLocalInertia( mass, localInertia );
+
+  let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+  let body = new Ammo.btRigidBody( rbInfo );
+
+  body.setFriction(4);
+  body.setRollingFriction(10);
+  physicsWorld.addRigidBody( body );
+}
+function createWall(posV, scaleV, quatV, massV){
+  let pos = posV;
+  let scale = scaleV;
+  let quat = quatV;
+  let mass = massV;
+
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load('material/BrickWhite.png');
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 4);
+  const material = new THREE.MeshBasicMaterial({ map: texture });
+    
+  let blockPlane = new THREE.Mesh(new THREE.BoxGeometry(), material );
+  
+
+  blockPlane.position.set(pos.x, pos.y, pos.z);
+  blockPlane.scale.set(scale.x, scale.y, scale.z);
+  blockPlane.rotation.set(quat.x, quat.y, quat.z);
+
+  blockPlane.castShadow = true;
+  blockPlane.receiveShadow = true;
+
+  scene.add(blockPlane);
+    
+  let transform = new Ammo.btTransform();
+  transform.setIdentity();
+  transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+  transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+  let motionState = new Ammo.btDefaultMotionState( transform );
+
+  let colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+  colShape.setMargin( 0.05 );
+
+  let localInertia = new Ammo.btVector3( 0, 0, 0 );
+  colShape.calculateLocalInertia( mass, localInertia );
+
+  let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+  let body = new Ammo.btRigidBody( rbInfo );
+
+  body.setFriction(4);
+  body.setRollingFriction(10);
+  physicsWorld.addRigidBody( body );
 }
 
-function getIntersections( controller ) {
-  controller.updateMatrixWorld();
-
-  tempMatrix.identity().extractRotation( controller.matrixWorld );
-
-  raycaster.ray.origin.setFromMatrixPosition( controller.matrixWorld );
-	raycaster.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
-
-	return raycaster.intersectObjects( group.children, false );
-}
-
-function intersectObjects( controller ) {
-
-  // Do not highlight in mobile-ar
-
-  if ( controller.userData.targetRayMode === 'screen' ) return;
-
-  // Do not highlight when already selected
-
-  if ( controller.userData.selected !== undefined ) return;
-
-  const line = controller.getObjectByName( 'line' );
-  const intersections = getIntersections( controller );
-
-  if ( intersections.length > 0 ) {
-
-    const intersection = intersections[ 0 ];
-
-    const object = intersection.object;
-    object.material.emissive.r = 1;
-    intersected.push( object );
-
-    line.scale.z = intersection.distance;
-
-  } else {
-
-    line.scale.z = 5;
-
-  }
-
-}
-
-function cleanIntersected() {
-
-  while ( intersected.length ) {
-
-    const object = intersected.pop();
-    object.material.emissive.r = 0;
-
-  }
-
-}
-
-function animate() {
-  renderer.setAnimationLoop(render);
-}
-
-function render() {
-  cleanIntersected();
-  let deltaTime = clock.getDelta();
-
-  intersectObjects( controller1 );
-  intersectObjects( controller2 );
-
-  updatePhysics( deltaTime );
-
-  renderer.render(scene, camera);
-}
 
 function updatePhysics( deltaTime ){    
   physicsWorld.stepSimulation( deltaTime, 10 );
@@ -333,6 +370,22 @@ function updatePhysics( deltaTime ){
       objThree.quaternion.set( q.x(), q.y(), q.z(), q.w() );
     }
   }
+}
+
+function animate() {
+  renderer.setAnimationLoop(render);
+}
+
+function render() {
+  controller.cleanIntersected();
+  let deltaTime = clock.getDelta();
+
+  controller.intersectObjects( controller.controller1 );
+  controller.intersectObjects( controller.controller2 );
+
+  updatePhysics( deltaTime );
+
+  renderer.render(scene, camera);
 }
 
 function onWindowResize() {
